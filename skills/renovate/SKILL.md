@@ -1,0 +1,265 @@
+---
+name: renovate
+description: Handle Renovate bot dependency update branches end-to-end. Use this skill whenever working on a renovate/* branch, reviewing a Renovate MR/PR, or asked to "handle renovate", "process a renovate update", "fix a renovate branch", or "apply a dependency upgrade". The skill identifies what was upgraded, researches breaking changes, adapts code, and verifies builds and tests pass.
+argument-hint: "[branch-name]"
+disable-model-invocation: true
+---
+
+# Renovate Update Handler
+
+Renovate branches bump versions but can't adapt code to breaking changes. This skill picks up where Renovate left off: understand what changed, research the impact, fix the code, verify it works.
+
+---
+
+## Step 1: Identify the Update
+
+Determine which branch to work on:
+- If already on a `renovate/*` branch, use it.
+- Otherwise ask the user which branch, or list available renovate branches: `git branch -a | grep renovate`.
+
+Checkout the branch if not already on it, then inspect what changed:
+
+```bash
+git diff $(git merge-base HEAD main)...HEAD -- \
+  '*.mod' '*/go.sum' \
+  '*/package.json' '*/package-lock.json' '*/yarn.lock' '*/pnpm-lock.yaml' \
+  '*/pom.xml' \
+  '*/Cargo.toml' '*/Cargo.lock' \
+  '*/requirements*.txt' '*/pyproject.toml' '*/poetry.lock' \
+  '*/Gemfile' '*/Gemfile.lock' \
+  'Dockerfile*' '*.bicep'
+```
+
+Parse the diff to extract:
+- **Package name(s)** — e.g., `com.example:artifact`, `@types/react`, `github.com/foo/bar`
+- **Old version → New version** — look for `-` and `+` lines in version files
+- **Which directories are affected** — which manifest files changed
+- **Which language/ecosystem** — determines which playbook to follow in Step 4 and 5
+
+---
+
+## Step 2: Research Breaking Changes
+
+For each upgraded package, search for breaking changes in the version range:
+
+- Search for `<package> <old_version> to <new_version> breaking changes migration`
+- Search for `<package> changelog <new_version>` or `<package> release notes`
+- For major version bumps (e.g., 1.x → 2.x), always look for a migration guide
+
+Summarize: list any renamed APIs, removed functions, changed signatures, new required configuration, or changed behavior.
+
+If there are no breaking changes (minor/patch bump with clean changelog), note that and proceed quickly to Step 4.
+
+---
+
+## Step 3: Analyze Codebase Usage
+
+Search the codebase for usages of the upgraded package using patterns appropriate to the ecosystem:
+
+- **Go**: grep for `"<package-path>"` in `*.go` files
+- **npm/Node.js**: grep for `require('<package>')`, `from '<package>'` in `*.ts`, `*.tsx`, `*.js` files
+- **Maven/Java**: grep for `<groupId>`, `<artifactId>`, or the class/package name in `*.java` files
+- **Python**: grep for `import <package>` or `from <package>` in `*.py` files
+- **Rust**: grep for the crate name in `*.rs` files
+
+Focus on the specific APIs that changed. Identify which files need updating.
+
+---
+
+## Step 4: Adapt the Code
+
+Apply the necessary changes based on the breaking changes you found:
+
+- Rename renamed functions/types/methods
+- Update changed function signatures or call sites
+- Replace removed APIs with their equivalents
+- Update configuration objects to match new schemas
+- Add new required imports or remove obsolete ones
+
+Make changes surgically — only what the version change requires. Don't refactor surrounding code.
+
+After editing, run the post-update tidy/sync step for the ecosystem (see **Language Playbooks** below).
+
+---
+
+## Step 5: Verify Build and Tests
+
+Run build and tests in each affected directory using the appropriate commands from the **Language Playbooks** below.
+
+If tests fail:
+1. Read the error output carefully — it usually points directly to what still needs changing.
+2. Check if the failure is a compile error (API mismatch) or a test assertion (behavior change).
+3. Fix the issue and re-run. If stuck, search for the specific error message + package name.
+
+---
+
+## Step 6: Report
+
+When done, summarize:
+- What package(s) were upgraded and by how much
+- What breaking changes existed (or "none found" for clean bumps)
+- What code was changed and why
+- Build/test status: passing or any remaining issues
+
+If you couldn't resolve a failure, explain what you tried and what would help resolve it.
+
+---
+
+## Language Playbooks
+
+Each playbook is self-contained. Jump to the one matching the ecosystem detected in Step 1. When a project uses multiple ecosystems, apply each relevant playbook.
+
+---
+
+### Go
+
+**Detect:** `go.mod` or `go.sum` changed.
+
+**Post-update tidy** (run in each affected module directory after editing):
+```bash
+go mod tidy
+```
+
+**Verify:**
+```bash
+go build ./...
+go test ./...
+```
+
+**Common patterns:**
+- Major version import path changes: `github.com/foo/bar` → `github.com/foo/bar/v2` — update all import statements in affected `.go` files.
+- Minor/patch: `go mod tidy` is usually all that's needed.
+
+---
+
+### Maven / Java
+
+**Detect:** `pom.xml` changed.
+
+**Post-update sync** (Maven resolves dependencies on the next build; no explicit sync needed):
+```bash
+# Optional: pre-download deps to check for resolution errors
+mvn dependency:resolve -q
+```
+
+**Verify** (in the affected module directory, or root for full build):
+```bash
+mvn verify
+```
+
+**Lint only:**
+```bash
+mvn verify -Plint
+```
+
+**Common patterns:**
+- Spring Boot / Spring Framework upgrades: check for deprecated `@Bean`, `SecurityFilterChain`, or property key changes.
+- Jakarta EE namespace migration (`javax.*` → `jakarta.*`): search all `.java` files for old namespace and update imports.
+- Major version bumps: check for removed APIs in the library's migration guide.
+- `pom.xml` property version variables: Renovate typically updates the `<version>` inside `<dependency>` blocks — confirm the right property was updated if the project uses `<properties>`.
+
+---
+
+### npm / Node.js
+
+**Detect:** `package.json`, `package-lock.json`, `yarn.lock`, or `pnpm-lock.yaml` changed.
+
+**Post-update sync** (install to update lockfile and node_modules):
+```bash
+npm install       # or: yarn install / pnpm install
+```
+
+**Verify:**
+```bash
+npm run build     # if a build step exists
+npm test          # or: npm run test / npx vitest run / npx jest
+npm run lint      # if a lint step exists
+```
+
+**Common patterns:**
+- Type-only changes (`@types/*`): search for type usages that match changed types, update annotations.
+- CJS → ESM migration: check for `require()` usage that needs to become `import`.
+- Major version bumps: check `peerDependencies` — other packages may need updating too.
+- Minor/patch: `npm install` to sync lockfile, then run tests.
+
+---
+
+### Python
+
+**Detect:** `requirements*.txt`, `pyproject.toml`, `poetry.lock`, or `setup.py` changed.
+
+**Post-update sync:**
+```bash
+pip install -r requirements.txt    # or: pip install -e . / poetry install
+```
+
+**Verify:**
+```bash
+python -m pytest                   # or: python -m unittest discover
+```
+
+**Common patterns:**
+- Major version bumps: check for renamed modules or removed functions in the changelog.
+- Minor/patch: sync dependencies and run tests.
+
+---
+
+### Rust / Cargo
+
+**Detect:** `Cargo.toml` or `Cargo.lock` changed.
+
+**Post-update sync:**
+```bash
+cargo update      # syncs Cargo.lock to the new version pins
+```
+
+**Verify:**
+```bash
+cargo build
+cargo test
+```
+
+**Common patterns:**
+- Trait or API changes: compiler errors will point directly to the affected lines.
+- Major version bumps: update the version in `Cargo.toml` and check for API changes.
+
+---
+
+### Ruby / Bundler
+
+**Detect:** `Gemfile` or `Gemfile.lock` changed.
+
+**Post-update sync:**
+```bash
+bundle install
+```
+
+**Verify:**
+```bash
+bundle exec rspec     # or: bundle exec rake test
+```
+
+---
+
+## Adding Support for a New Ecosystem
+
+To add a new language/ecosystem to this skill, add a new `###` subsection under **Language Playbooks** with:
+1. **Detect:** — what file pattern signals this ecosystem
+2. **Post-update sync** — command to sync/install after version bump
+3. **Verify** — build and test commands
+4. **Common patterns** — recurring issues specific to this ecosystem
+
+---
+
+## Quick Reference
+
+**No code changes needed** (most minor/patch bumps):
+1. Run the post-update sync command for the ecosystem
+2. Run tests to confirm nothing broke
+
+**Clean patch bump checklist:**
+- Go: `go mod tidy` → `go test ./...`
+- Maven: `mvn verify`
+- npm: `npm install` → `npm test`
+- Python: `pip install -r requirements.txt` → `python -m pytest`
+- Rust: `cargo update` → `cargo test`

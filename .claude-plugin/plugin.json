@@ -1,0 +1,12 @@
+{
+  "name": "renovate",
+  "version": "1.0.0",
+  "description": "Handle Renovate bot dependency update branches end-to-end",
+  "author": {
+    "name": "d-rk",
+    "url": "https://github.com/d-rk"
+  },
+  "repository": "https://github.com/d-rk/claude-skills",
+  "license": "MIT",
+  "keywords": ["renovate", "dependencies", "upgrade", "migration"]
+}
