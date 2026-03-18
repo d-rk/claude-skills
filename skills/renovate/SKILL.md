@@ -20,7 +20,8 @@ Determine which branch to work on:
 Checkout the branch if not already on it, then inspect what changed:
 
 ```bash
-git diff $(git merge-base HEAD main)...HEAD -- \
+BASE_BRANCH=$(git branch -r | grep -oE 'origin/(develop|main|master)' | head -1 | sed 's|origin/||'); \
+git diff $(git merge-base HEAD $BASE_BRANCH)...HEAD -- \
   '*.mod' '*/go.sum' \
   '*/package.json' '*/package-lock.json' '*/yarn.lock' '*/pnpm-lock.yaml' \
   '*/pom.xml' \
