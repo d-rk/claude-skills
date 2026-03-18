@@ -181,7 +181,7 @@ npm run lint      # if a lint step exists
 - CJS → ESM migration: check for `require()` usage that needs to become `import`.
 - Major version bumps: check `peerDependencies` — other packages may need updating too.
 - Minor/patch: `npm install` to sync lockfile, then run tests.
-- **Peer dependency conflicts:** If `npm install` fails with peer dep errors, do not add `--legacy-peer-deps`. That flag masks real incompatibilities and can cause subtle runtime failures. Instead, identify which packages conflict and resolve them properly — upgrade the conflicting package, or check if the library's peer dep constraint is overly strict (and open an issue upstream if so).
+- **Peer dependency conflicts:** If `npm install` fails with peer dep errors, do not add `--legacy-peer-deps`. That flag masks real incompatibilities and can cause subtle runtime failures. Instead, identify which packages conflict and resolve them properly.
 
 ---
 
@@ -255,8 +255,7 @@ To add a new language/ecosystem to this skill, add a new `###` subsection under 
 ## Quick Reference
 
 **No code changes needed** (most minor/patch bumps):
-1. Run the post-update sync command for the ecosystem
-2. Run tests to confirm nothing broke
+- Run tests to confirm nothing broke
 
 **Clean patch bump checklist:**
 - Go: `go mod tidy` → `go test ./...`
