@@ -18,6 +18,19 @@ Renovate bumps versions but can't adapt code to breaking changes. This skill pic
 /renovate renovate/some-branch-name
 ```
 
+### `/cve-fix`
+
+Fixes CVEs in project dependencies end-to-end.
+
+Surfaces vulnerable components, traces the version source, researches the CVE online, upgrades to a patched version when available, and suppresses only as a last resort. Verifies the build passes clean after the fix.
+
+**Supported ecosystems:** Maven/Java, npm/Node.js, Go, Python, Rust/Cargo, Ruby/Bundler
+
+**Usage:**
+```
+/cve-fix
+```
+
 ## Installation
 
 ### Add as a marketplace
@@ -26,12 +39,13 @@ Renovate bumps versions but can't adapt code to breaking changes. This skill pic
 /plugin marketplace add d-rk/claude-skills
 ```
 
-### Install the renovate skill
+### Install skills
 
 ```
 /plugin install renovate@claude-skills
+/plugin install cve-fix@claude-skills
 ```
 
 ## Manual installation
 
-Copy `skills/renovate/SKILL.md` into `~/.claude/skills/renovate/SKILL.md`.
+Copy the skill's `SKILL.md` into `~/.claude/skills/<skill-name>/SKILL.md`.
