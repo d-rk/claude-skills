@@ -1,6 +1,6 @@
 ---
 name: renovate
-description: Handle Renovate bot dependency update branches end-to-end. Use this skill whenever working on a renovate/* branch, reviewing a Renovate MR/PR, or asked to "handle renovate", "process a renovate update", "fix a renovate branch", or "apply a dependency upgrade". The skill identifies what was upgraded, researches breaking changes, adapts code, and verifies builds and tests pass.
+description: Handle Renovate bot dependency update branches end-to-end. Use this skill whenever working on a renovate/* branch, reviewing a Renovate MR, or asked to "handle renovate", "process a renovate update", "fix a renovate branch", or "apply a dependency upgrade". The skill identifies what was upgraded, researches breaking changes, adapts code, and verifies builds and tests pass.
 argument-hint: "[branch-name]"
 disable-model-invocation: true
 ---
@@ -15,12 +15,39 @@ Renovate branches bump versions but can't adapt code to breaking changes. This s
 
 Determine which branch to work on:
 - If already on a `renovate/*` branch, use it.
-- Otherwise, find renovate branches via `git branch -a | grep renovate` and also find the corresponding pull/merge request:
-  - GitLab: `glab mr list --label renovate`
-  - GitHub: `gh pr list --label renovate`
+- Otherwise, list the Gitlab MRs:
+  ```bash
+    PROJECT=$(git remote get-url origin | sed 's|.*[:/]\([^/]*/[^/]*\)\.git$|\1|')
+    glab api graphql -f query="
+    {
+      project(fullPath: \"$PROJECT\") {
+        mergeRequests(state: opened, first: 100) {
+          nodes {
+            sourceBranch
+            webUrl
+            description
+            headPipeline { status }
+          }
+        }
+      }
+    }" | jq '[
+      .data.project.mergeRequests.nodes[]
+      | select(.sourceBranch | startswith("renovate/"))
+      | {
+          branch: .sourceBranch,
+          url: .webUrl,
+          change: (
+            .description
+            | capture("`(?<from>[^`]+)` -> `(?<to>[^`]+)`")
+            | "\(.from) -> \(.to)"
+          ),
+          pipeline: (.headPipeline.status // "none")
+        }
+    ]'
+  ```
   - If the CLI is not available, stop here and tell the user to install it.
-- Prefer the PRs/MRs where the pipeline did not fail.
-- Ask the user which PR/MR resp. branch to process.
+- Prefer the MRs where the pipeline did not fail.
+- Ask the user which MR resp. branch to process.
 
 Checkout the branch if not already on it, then inspect what changed:
 
@@ -50,11 +77,12 @@ For each upgraded package, search for breaking changes in the version range:
 
 - Search for `<package> <old_version> to <new_version> breaking changes migration`
 - Search for `<package> changelog <new_version>` or `<package> release notes`
-- For major version bumps (e.g., 1.x → 2.x), always look for a migration guide
+- For major version bumps (e.g., 1.x.x → 2.x.x), always look for a migration guide
+- For minor version bumps (e.g., 1.2.x → 1.3.x), always look for breaking changes in release notes
 
 Summarize: list any renamed APIs, removed functions, changed signatures, new required configuration, or changed behavior.
 
-If there are no breaking changes (minor/patch bump with clean changelog), note that and proceed quickly to Step 4.
+If there are no breaking changes (patch bump with clean changelog), note that and proceed quickly to Step 4.
 
 ---
 
@@ -107,27 +135,92 @@ When done, summarize:
 - What code was changed and why
 - Build/test status: passing or any remaining issues
 
-If you couldn't resolve a failure, explain what you tried and what would help resolve it.
+If you couldn't resolve a failure, explain what you tried and stop here.
 
 ---
 
-## Step 7: Merge
+## Step 7: Push branch
+
+You must ask for confirmation to push the branch, if not confirmed stop here.
+
+Push changes and verify the pipeline passes:
+
+```bash
+git push
+```
+
+Then poll for the new pipeline to complete:
+
+```bash
+MR=<mr-iid>
+
+# Wait for pipeline to finish (poll every 30s)
+while true; do
+  STATUS=$(glab mr view $MR -F json | jq -r '.head_pipeline.status')
+  echo "Pipeline status: $STATUS"
+  [[ "$STATUS" != "running" && "$STATUS" != "pending" && "$STATUS" != "created" ]] && break
+  sleep 30
+done
+echo "Final status: $STATUS"
+```
+
+If pipeline **succeeded** → proceed to Step 8.
+
+If pipeline **failed** → fetch logs and go back to Step 4:
+
+```bash
+PIPELINE_ID=$(glab mr view $MR -F json | jq -r '.head_pipeline.id')
+
+# Failed direct jobs
+glab api "/projects/:id/pipelines/$PIPELINE_ID/jobs" | \
+  jq '[.[] | select(.status == "failed") | {id, name, stage}]'
+
+# Failed bridge jobs → child pipelines
+glab api "/projects/:id/pipelines/$PIPELINE_ID/bridges" | \
+  jq '[.[] | select(.status == "failed") | {name, child_id: .downstream_pipeline.id}]'
+
+# For each failed child_id:
+CHILD_ID=<child_id>
+FAILED_JOB_ID=$(glab api "/projects/:id/pipelines/$CHILD_ID/jobs" | \
+  jq -r '[.[] | select(.status == "failed")] | first | .id')
+
+# Fetch logs
+glab api "/projects/:id/jobs/$FAILED_JOB_ID/trace"
+```
+
+Analyze logs, fix the issue (Step 4), then repeat from top of Step 7.
+
+---
+
+## Step 8: Merge
+
+You must ask for confirmation to merge the MR, if not confirmed stop here.
 
 Before merging:
-- Check that the PR/MR build is successful.
+- Check that the MR build is successful.
 - There must not be any open discussions.
-- Add a comment to the PR/MR telling what you did. Use the prefix text "Generated by Claude".
+- Add a comment to the MR telling what you did. Use the prefix text "Generated by Claude".
   - GitLab: `glab mr note <mr-id> --message "Generated by Claude: ..."`
-  - GitHub: `gh pr comment <pr-number> --body "Generated by Claude: ..."`
 
-Ask for confirmation to merge the PR/MR.
+then merge with: `glab mr merge <mr-id> --squash`
 
-To merge:
-- GitLab: `glab mr merge <mr-id> --squash`
-- GitHub: `gh pr merge <pr-number> --squash`
+After each merge, wait 5 seconds before merging the next MR to let the platform recover:
+```bash
+sleep 5
+```
 
-- Merging several PRs/MRs concurrently sometimes fails. Give the platform a bit of time to recover.
-- If a PR/MR cannot be merged due to conflicts, tell Renovate to rebase/retry this PR/MR. Then, leave it for now.
+If a merge fails due to conflicts, rebase the branch and retry once:
+Rebase locally so conflicts can be resolved:
+```bash
+git fetch origin
+git checkout <renovate-branch>
+git rebase origin/<base-branch>
+# resolve any conflicts, then:
+git push --force-with-lease
+```
+After the push triggers a new pipeline and it passes, re-run the merge command.
+
+If the retry also fails, leave the MR for now and move on.
 
 ---
 
