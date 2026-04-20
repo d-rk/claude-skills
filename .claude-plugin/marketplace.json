@@ -15,6 +15,14 @@
       "version": "1.0.0",
       "license": "MIT",
       "keywords": ["renovate", "dependencies", "upgrade", "migration"]
+    },
+    {
+      "name": "cve-fix",
+      "source": "./",
+      "description": "Fix CVEs in project dependencies end-to-end",
+      "version": "1.0.0",
+      "license": "MIT",
+      "keywords": ["cve", "security", "dependencies", "vulnerability"]
     }
   ]
 }
